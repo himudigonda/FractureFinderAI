@@ -1,0 +1,17 @@
+# config.yaml
+
+classification:
+  csv_file: 'path/to/classification_csv_file.csv'
+  root_dir: 'path/to/classification_images/'
+  batch_size: 32
+  num_classes: 1
+  pretrained: true
+  weights_path: 'weights/resnet50_weights.pth'
+
+localization:
+  csv_file: 'path/to/localization_csv_file.csv'
+  root_dir: 'path/to/localization_images/'
+  batch_size: 32
+  num_classes: 2  # 1 class (fracture) + background
+  pretrained: true
+  weights_path: 'weights/fasterrcnn_weights.pth'
