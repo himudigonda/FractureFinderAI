@@ -1,98 +1,78 @@
-
-import numpy as np
 import torch
-from sklearn.metrics import roc_auc_score, average_precision_score
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from PIL import Image
+from scipy.optimize import linear_sum_assignment
 
-# Non-Maximum Suppression (NMS)
-def non_maximum_suppression(boxes, scores, iou_threshold=0.5):
-    indices = np.argsort(scores)[::-1]
-    keep = []
-    
-    while len(indices) > 0:
-        current = indices[0]
-        keep.append(current)
-        if len(indices) == 1:
-            break
-        ious = np.array([iou(boxes[current], boxes[i]) for i in indices[1:]])
-        indices = indices[1:][ious < iou_threshold]
-    
-    return keep
 
-def iou(box1, box2):
-    x1, y1, x2, y2 = box1
-    x1_, y1_, x2_, y2_ = box2
-    
-    inter_x1 = max(x1, x1_)
-    inter_y1 = max(y1, y1_)
-    inter_x2 = min(x2, x2_)
-    inter_y2 = min(y2, y2_)
-    
-    inter_area = max(0, inter_x2 - inter_x1 + 1) * max(0, inter_y2 - inter_y1 + 1)
-    box1_area = (x2 - x1 + 1) * (y2 - y1 + 1)
-    box2_area = (x2_ - x1_ + 1) * (y2_ - y1_ + 1)
-    
-    union_area = box1_area + box2_area - inter_area
-    return inter_area / union_area
-
-# Data Loader Utility
-def collate_fn(batch):
-    return tuple(zip(*batch))
-
-# Evaluation Metrics
-def calculate_mAP(pred_boxes, true_boxes, iou_threshold=0.5):
+def calculate_iou(box1, box2):
     """
-    Calculate mean Average Precision (mAP) for object detection.
-    Args:
-    - pred_boxes (list of tensors): predicted bounding boxes and scores
-    - true_boxes (list of tensors): ground truth bounding boxes
-    - iou_threshold (float): IoU threshold to consider a prediction as true positive
+    Calculate the Intersection over Union (IoU) of two bounding boxes.
+    """
+    if box1.size(0) == 0 or box2.size(0) == 0:
+        return 0.0
 
-    Returns:
-    - mAP (float): mean Average Precision
-    """
-    # Code to calculate mAP
-    pass
+    x1_max = torch.max(box1[:, None, 0], box2[:, 0])
+    y1_max = torch.max(box1[:, None, 1], box2[:, 1])
+    x2_min = torch.min(box1[:, None, 2], box2[:, 2])
+    y2_min = torch.min(box1[:, None, 3], box2[:, 3])
 
-def calculate_mAUC(y_true, y_scores):
-    """
-    Calculate mean Area Under the Curve (mAUC) for classification.
-    Args:
-    - y_true (array-like): true labels
-    - y_scores (array-like): predicted scores
+    inter_area = torch.clamp(x2_min - x1_max, min=0) * torch.clamp(
+        y2_min - y1_max, min=0
+    )
+    box1_area = (box1[:, 2] - box1[:, 0]) * (box1[:, 3] - box1[:, 1])
+    box2_area = (box2[:, 2] - box2[:, 0]) * (box2[:, 3] - box2[:, 1])
+    union_area = box1_area[:, None] + box2_area - inter_area
 
-    Returns:
-    - mAUC (float): mean Area Under the Curve
-    """
-    return roc_auc_score(y_true, y_scores)
+    iou = inter_area / union_area
 
-def calculate_mAP_score(y_true, y_scores):
-    """
-    Calculate mean Average Precision score for classification.
-    Args:
-    - y_true (array-like): true labels
-    - y_scores (array-like): predicted scores
+    # Use Hungarian algorithm to find the best matching
+    iou_matrix = iou.cpu().numpy()
+    row_ind, col_ind = linear_sum_assignment(-iou_matrix)
 
-    Returns:
-    - mAP_score (float): mean Average Precision score
-    """
-    return average_precision_score(y_true, y_scores)
+    return iou[row_ind, col_ind].mean().item()
 
-# Save Model Weights
-def save_model_weights(model, filepath):
-    """
-    Save the model weights to a file.
-    Args:
-    - model (torch.nn.Module): The model whose weights are to be saved
-    - filepath (str): The file path where the weights should be saved
-    """
-    torch.save(model.state_dict(), filepath)
 
-# Load Model Weights
-def load_model_weights(model, filepath):
+def calculate_dice(box1, box2):
     """
-    Load model weights from a file.
-    Args:
-    - model (torch.nn.Module): The model to load weights into
-    - filepath (str): The file path from where the weights should be loaded
+    Calculate the Dice score of two bounding boxes.
     """
-    model.load_state_dict(torch.load(filepath))
+    if box1.size(0) == 0 or box2.size(0) == 0:
+        return 0.0
+
+    x1_max = torch.max(box1[:, None, 0], box2[:, 0])
+    y1_max = torch.max(box1[:, None, 1], box2[:, 1])
+    x2_min = torch.min(box1[:, None, 2], box2[:, 2])
+    y2_min = torch.min(box1[:, None, 3], box2[:, 3])
+
+    inter_area = torch.clamp(x2_min - x1_max, min=0) * torch.clamp(
+        y2_min - y1_max, min=0
+    )
+    box1_area = (box1[:, 2] - box1[:, 0]) * (box1[:, 3] - box1[:, 1])
+    box2_area = (box2[:, 2] - box2[:, 0]) * (box2[:, 3] - box2[:, 1])
+    dice_score = (2 * inter_area) / (box1_area[:, None] + box2_area)
+
+    # Use Hungarian algorithm to find the best matching
+    dice_matrix = dice_score.cpu().numpy()
+    row_ind, col_ind = linear_sum_assignment(-dice_matrix)
+
+    return dice_score[row_ind, col_ind].mean().item()
+
+
+def visualize_image(image, annotations, categories):
+    print("Visualizing image with annotations...")
+    fig, ax = plt.subplots(1)
+    ax.imshow(image)
+
+    for bbox, label in zip(annotations["boxes"], annotations["labels"]):
+        category = categories[label.item()]
+        x, y, width, height = bbox.tolist()
+        rect = patches.Rectangle(
+            (x, y), width, height, linewidth=2, edgecolor="r", facecolor="none"
+        )
+        ax.add_patch(rect)
+        ax.text(x, y, category, color="white", backgroundcolor="red")
+
+    plt.axis("off")
+    plt.show()
+    print("Visualization completed")

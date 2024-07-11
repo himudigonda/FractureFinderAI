@@ -1,122 +1,108 @@
-import yaml
 import torch
 from torch.utils.data import DataLoader
-from dataset import get_classification_dataloader, get_localization_dataloader, ChestXRayLocalizationDataset
-from classification_models import ResNetClassifier
-from localization_models import get_faster_rcnn_model
-from utils import save_model_weights, load_model_weights, calculate_mAUC
-import pandas as pd
+from dataset import COCODataset
+from models import get_model, train_model
+import torchvision.transforms as T
+import utils
+from tqdm import tqdm
 
-def train_classification_model(model, train_loader, criterion, optimizer, num_epochs, device):
-    model.to(device)
-    model.train()
-    for epoch in range(num_epochs):
-        running_loss = 0.0
-        for images, labels in train_loader:
-            images, labels = images.to(device), labels.to(device).float().unsqueeze(1)
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
-        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {running_loss / len(train_loader):.4f}")
-    save_model_weights(model, 'weights/classification_model_weights.pth')
 
-def filter_images_with_fractures(classification_model, dataloader, device):
-    classification_model.to(device)
-    classification_model.eval()
-    fracture_images = []
-    with torch.no_grad():
-        for images, labels in dataloader:
-            images = images.to(device)
-            outputs = classification_model(images)
-            predicted = (outputs > 0.5).cpu().numpy()
-            fracture_images.extend(images[predicted[:, 0] == 1].cpu().numpy())
-    return fracture_images
+def collate_fn(batch):
+    batch = list(filter(lambda x: x is not None, batch))
+    if len(batch) == 0:
+        return [], []
+    return tuple(zip(*batch))
 
-def create_localization_dataframe(fracture_images, original_csv):
-    original_df = pd.read_csv(original_csv)
-    new_df = original_df[original_df['image_path'].isin(fracture_images)]
-    new_csv_path = 'data/fracture_images.csv'
-    new_df.to_csv(new_csv_path, index=False)
-    return new_csv_path
-
-def train_localization_model(model, train_loader, criterion, optimizer, num_epochs, device):
-    model.to(device)
-    model.train()
-    for epoch in range(num_epochs):
-        running_loss = 0.0
-        for images, targets in train_loader:
-            images = list(image.to(device) for image in images)
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-            loss_dict = model(images, targets)
-            losses = sum(loss for loss in loss_dict.values())
-            optimizer.zero_grad()
-            losses.backward()
-            optimizer.step()
-            running_loss += losses.item()
-        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {running_loss / len(train_loader):.4f}")
-    save_model_weights(model, 'weights/localization_model_weights.pth')
 
 def main():
-    with open('config.yaml') as file:
-        config = yaml.load(file, Loader=yaml.FullLoader)
-    
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # Classification Data Loaders
-    classification_train_loader = get_classification_dataloader(
-        config['classification']['csv_file'], 
-        config['classification']['root_dir'], 
-        batch_size=config['classification']['batch_size'], 
-        train=True
-    )
-    classification_test_loader = get_classification_dataloader(
-        config['classification']['csv_file'], 
-        config['classification']['root_dir'], 
-        batch_size=config['classification']['batch_size'], 
-        train=False
-    )
+    # Paths
+    annotations_file = "data/data.json"
+    img_dir = "data/"
+    weights_path = "weights/detection_model.pth"
 
-    # Train Classification Model
-    classification_model = ResNetClassifier(
-        num_classes=config['classification']['num_classes'], 
-        pretrained=config['classification']['pretrained'], 
-        weights_path=config['classification']['weights_path']
+    # Hyperparameters
+    num_classes = (
+        4  # 3 classes (fracture, old fracture, suspicious fracture) + background
     )
-    criterion_classification = torch.nn.BCELoss()
-    optimizer_classification = torch.optim.Adam(classification_model.parameters(), lr=0.001)
-    train_classification_model(classification_model, classification_train_loader, criterion_classification, optimizer_classification, num_epochs=10, device=device)
+    batch_size = 4
+    num_epochs = 10
+    learning_rate = 0.005
 
-    # Filter Images with Fractures
-    fracture_images = filter_images_with_fractures(classification_model, classification_test_loader, device)
-    
-    # Create new CSV for localization training
-    new_csv_path = create_localization_dataframe(fracture_images, config['localization']['csv_file'])
+    # Transforms
+    train_transform = T.Compose([T.ToTensor(), T.RandomHorizontalFlip(0.5)])
+    test_transform = T.Compose([T.ToTensor()])
 
-    # Localization Data Loaders
-    localization_train_loader = get_localization_dataloader(
-        new_csv_path, 
-        config['localization']['root_dir'], 
-        batch_size=config['localization']['batch_size'], 
-        train=True
+    # Datasets
+    print("Loading training dataset...")
+    train_dataset = COCODataset(annotations_file, img_dir, transform=train_transform)
+    print(f"Training dataset loaded with {len(train_dataset)} images")
+
+    print("Loading testing dataset...")
+    test_dataset = COCODataset(annotations_file, img_dir, transform=test_transform)
+    print(f"Testing dataset loaded with {len(test_dataset)} images")
+
+    # Dataloaders
+    print("Creating data loaders...")
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,
+        collate_fn=collate_fn,
     )
-    localization_test_loader = get_localization_dataloader(
-        new_csv_path, 
-        config['localization']['root_dir'], 
-        batch_size=config['localization']['batch_size'], 
-        train=False
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        collate_fn=collate_fn,
     )
+    print("Data loaders created")
 
-    # Train Localization Model
-    localization_model = get_faster_rcnn_model(
-        num_classes=config['localization']['num_classes'], 
-        weights_path=config['localization']['weights_path']
+    # Model
+    print("Initializing model...")
+    model = get_model(num_classes)
+    print("Model initialized")
+
+    # Device
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    model.to(device)
+    print(f"Using device: {device}")
+
+    # Optimizer
+    print("Creating optimizer...")
+    params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.SGD(
+        params, lr=learning_rate, momentum=0.9, weight_decay=0.0005
     )
-    criterion_localization = None  # Localization models have their own loss functions
-    optimizer_localization = torch.optim.Adam(localization_model.parameters(), lr=0.001)
-    train_localization_model(localization_model, localization_train_loader, criterion_localization, optimizer_localization, num_epochs=10, device=device)
+    print("Optimizer created")
 
-if __name__ == '__main__':
+    # Train the model
+    print("Starting training...")
+    model = train_model(model, train_loader, optimizer, device, num_epochs)
+    print("Training completed")
+
+    # Save the model
+    torch.save(model.state_dict(), weights_path)
+    print(f"Model saved to {weights_path}")
+
+    # Evaluate the model
+    print("Starting evaluation...")
+    model.eval()
+    with torch.no_grad():
+        for idx, (images, targets) in enumerate(tqdm(test_loader, desc="Evaluating")):
+            if len(images) == 0:
+                continue
+            images = list(image.to(device) for image in images)
+            outputs = model(images)
+            for i, output in enumerate(outputs):
+                img = images[i].cpu().permute(1, 2, 0).numpy()
+                target = targets[i]
+                output = output
+                utils.visualize_image(img, output, train_dataset.categories)
+                utils.visualize_image(img, target, train_dataset.categories)
+    print("Evaluation completed")
+
+
+if __name__ == "__main__":
     main()
