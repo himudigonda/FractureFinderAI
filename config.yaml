@@ -1,17 +1,9 @@
-# config.yaml
-
-classification:
-  csv_file: 'path/to/classification_csv_file.csv'
-  root_dir: 'path/to/classification_images/'
-  batch_size: 32
-  num_classes: 1
-  pretrained: true
-  weights_path: 'weights/resnet50_weights.pth'
-
-localization:
-  csv_file: 'path/to/localization_csv_file.csv'
-  root_dir: 'path/to/localization_images/'
-  batch_size: 32
-  num_classes: 2  # 1 class (fracture) + background
-  pretrained: true
-  weights_path: 'weights/fasterrcnn_weights.pth'
+detection:
+  annotations_file: "data/data.json"
+  img_dir: "data/"
+  weights_path: "weights/detection_model.pth"
+  checkpoint_path: "checkpoints/detection_model_checkpoint.pth"
+  num_classes: 4 # 3 classes (fracture, old fracture, suspicious fracture) + background
+  batch_size: 4
+  num_epochs: 10
+  learning_rate: 0.005

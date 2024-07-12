@@ -3,7 +3,11 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
 from scipy.optimize import linear_sum_assignment
+import os
+import logging
 
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
 def calculate_iou(box1, box2):
     """
@@ -32,7 +36,6 @@ def calculate_iou(box1, box2):
 
     return iou[row_ind, col_ind].mean().item()
 
-
 def calculate_dice(box1, box2):
     """
     Calculate the Dice score of two bounding boxes.
@@ -58,9 +61,8 @@ def calculate_dice(box1, box2):
 
     return dice_score[row_ind, col_ind].mean().item()
 
-
 def visualize_image(image, annotations, categories):
-    print("Visualizing image with annotations...")
+    logging.info("Visualizing image with annotations...")
     fig, ax = plt.subplots(1)
     ax.imshow(image)
 
@@ -75,4 +77,27 @@ def visualize_image(image, annotations, categories):
 
     plt.axis("off")
     plt.show()
-    print("Visualization completed")
+    logging.info("Visualization completed")
+
+def save_checkpoint(model, optimizer, epoch, checkpoint_path):
+    """
+    Save model checkpoint.
+    """
+    state = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+    }
+    torch.save(state, checkpoint_path)
+    logging.info(f"Checkpoint saved to {checkpoint_path}")
+
+def load_checkpoint(checkpoint_path, model, optimizer):
+    """
+    Load model checkpoint.
+    """
+    state = torch.load(checkpoint_path)
+    model.load_state_dict(state['model_state_dict'])
+    optimizer.load_state_dict(state['optimizer_state_dict'])
+    epoch = state['epoch']
+    logging.info(f"Checkpoint loaded from {checkpoint_path}")
+    return epoch
